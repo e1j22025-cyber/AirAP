@@ -15,12 +15,14 @@ struct AlbumArtView: View {
 		GeometryReader { geo in
 			let minWidthHeight = min(geo.size.width, geo.size.height)
 			ZStack {
-				RoundedRectangle(cornerRadius: 25)
-					.frame(
-						maxWidth: minWidthHeight,
-						maxHeight: minWidthHeight
-					)
-					.modifier(foregroundColorStyle(.gray.opacity(0.5)))
+				if #unavailable(iOS 19) {
+					RoundedRectangle(cornerRadius: 25)
+						.frame(
+							maxWidth: minWidthHeight,
+							maxHeight: minWidthHeight
+						)
+						.modifier(foregroundColorStyle(.gray.opacity(0.5)))
+				}
 				Image(systemName: "music.note")
 					.resizable()
 					.scaledToFit()

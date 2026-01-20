@@ -6,8 +6,7 @@
 //
 
 import SwiftUI
-// NOTE: AirAP is intended to run on iOS 15.5 (iPhone XR).
-// ActivityKit (Live Activities) is iOS 16.1+ and is not used here.
+import ActivityKit
 
 struct NowPlaying: View {
 	@ObservedObject var ASmanager: AirstreamManager

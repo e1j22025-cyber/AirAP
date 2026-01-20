@@ -14,14 +14,36 @@ jobs:
       - name: Install Carthage
         run: brew install carthage
 
-      # 依存関係は update だと勝手に新しくなりやすいので bootstrap 推奨
-      # さらに deployment target を 15.0 に固定して、iOS 26 などに引っ張られる事故を減らす
+      # Carthage: まずはチェックアウトだけ行い、依存側の deployment target を iOS 15.0 に強制。
+      # これをしないと Airstream が iOS 16+ 向けにビルドされ、iOS 15.5 で dyld が落ちることがある。
+      - name: Fetch dependencies (Carthage, no build)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf Carthage/Build
+          carthage bootstrap --platform iOS --use-xcframeworks --no-build
+
+      - name: Patch dependency deployment targets to iOS 15.0
+        run: |
+          set -e
+          TARGET=15.0
+          # Airstream / shairplay など、チェックアウトされた Xcode プロジェクトの target を一括で下げる
+          for pbx in $(find Carthage/Checkouts -name project.pbxproj); do
+            perl -pi -e "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = ${TARGET};/g" "$pbx"
+          done
+          for xc in $(find Carthage/Checkouts -name '*.xcconfig' 2>/dev/null); do
+            perl -pi -e "s/IPHONEOS_DEPLOYMENT_TARGET\s*=\s*[0-9.]+/IPHONEOS_DEPLOYMENT_TARGET = ${TARGET}/g" "$xc"
+          done
+          echo "==== patched occurrences (top 200) ===="
+          grep -R "IPHONEOS_DEPLOYMENT_TARGET" -n Carthage/Checkouts | head -n 200 || true
+
       - name: Build dependencies (Carthage)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+          CARTHAGE_XCODEBUILD_ARGUMENTS: "IPHONEOS_DEPLOYMENT_TARGET=15.0"
         run: |
-          carthage bootstrap --platform iOS --use-xcframeworks --cache-builds
+          rm -rf Carthage/Build
+          carthage build --platform iOS --use-xcframeworks
 
       - name: List schemes (debug)
         run: xcodebuild -list -project AirAP.xcodeproj
@@ -48,6 +70,25 @@ jobs:
             _EXPERIMENTAL_CLANG_EXPLICIT_MODULES=NO \
             _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO \
             clean archive | tee xcodebuild.log
+
+      # iOS 15.5 での起動クラッシュ（dyld: Symbol missing）を防ぐためのチェック
+      - name: Verify embedded Airstream is iOS15-safe
+        if: success()
+        run: |
+          set -e
+          BIN="build/AirAP.xcarchive/Products/Applications/AirAP.app/Frameworks/Airstream.framework/Airstream"
+          if [ ! -f "$BIN" ]; then
+            echo "Airstream binary not found: $BIN"; exit 1
+          fi
+          echo "== vtool (min OS) =="
+          xcrun vtool -show-build "$BIN" || true
+          echo "== undefined symbols (must NOT contain objc_claimAutoreleasedReturnValue) =="
+          if xcrun nm -um "$BIN" | grep -q "objc_claimAutoreleasedReturnValue"; then
+            echo "ERROR: Airstream still references objc_claimAutoreleasedReturnValue (not available on iOS 15.5)";
+            xcrun nm -um "$BIN" | grep "objc_claimAutoreleasedReturnValue" || true
+            exit 1
+          fi
+          echo "OK"
 
 
       # 失敗しても必ず error 行を抜粋表示（ログが長くても原因が見える）

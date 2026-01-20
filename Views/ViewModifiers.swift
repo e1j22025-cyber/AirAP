@@ -10,10 +10,14 @@ import SwiftUI
 
 struct AlbumArtGlassEffect: ViewModifier {
 	func body(content: Content) -> some View {
-		// AirAP targets iOS 15+. We keep this simple and always apply a material background.
-		content
-			.background(.ultraThinMaterial)
-			.clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+		if #available(iOS 19, *) {
+			content
+				.background(.ultraThinMaterial)
+				.clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+
+		} else {
+			content
+		}
 	}
 }
 
@@ -42,7 +46,11 @@ struct monospacedIfAv: ViewModifier {
 
 struct backgroundExtensionEffectIfAv: ViewModifier {
 	func body(content: Content) -> some View {
-		content.background(.ultraThinMaterial)
+		if #available(iOS 19, *) {
+			content.background(.ultraThinMaterial)
+		} else {
+			content
+		}
 	}
 }
 
@@ -54,13 +62,22 @@ struct foregroundColorStyle: ViewModifier {
 	}
 	
 	func body(content: Content) -> some View {
-		content.foregroundStyle(color)
+		if #available(iOS 15, *) {
+			content.foregroundStyle(color)
+		} else {
+			content.foregroundColor(color)
+		}
 	}
 }
 
 struct UltraThinMaterialIfAv: ViewModifier {
 	func body(content: Content) -> some View {
-		content.background(.ultraThinMaterial)
+		if #available(iOS 15, *) {
+			content
+				.background(.ultraThinMaterial)
+		} else {
+			content
+		}
 	}
 }
 
