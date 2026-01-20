@@ -11,7 +11,10 @@ import SwiftUI
 struct AlbumArtGlassEffect: ViewModifier {
 	func body(content: Content) -> some View {
 		if #available(iOS 19, *) {
-			content.glassEffect(in: .rect(cornerRadius: 25))
+			content
+				.background(.ultraThinMaterial)
+				.clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+
 		} else {
 			content
 		}
@@ -44,7 +47,7 @@ struct monospacedIfAv: ViewModifier {
 struct backgroundExtensionEffectIfAv: ViewModifier {
 	func body(content: Content) -> some View {
 		if #available(iOS 19, *) {
-			content.backgroundExtensionEffect()
+			content.background(.ultraThinMaterial)
 		} else {
 			content
 		}
