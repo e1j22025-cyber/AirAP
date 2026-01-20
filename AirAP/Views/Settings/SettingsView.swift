@@ -9,7 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
 	@ObservedObject var ASmanager: AirstreamManager
-	
+
 	var body: some View {
 		VStack {
 			Form {
@@ -20,7 +20,8 @@ struct SettingsView: View {
 					HStack {
 						TextField("AirPlay Server Name", text: $ASmanager.settings.name)
 							.textFieldStyle(RoundedBorderTextFieldStyle())
-						Button() {
+
+						Button {
 							ASmanager.settings.saveSettings()
 							ASmanager.startStop()
 							ASmanager.startStop()
@@ -32,22 +33,21 @@ struct SettingsView: View {
 						}
 					}
 				}
-				Section(
-					header: Text("background")
-				) {
+
+				Section(header: Text("background")) {
 					Toggle("Show blurred album art as background", isOn: $ASmanager.settings.showBg)
 						.onChange(of: ASmanager.settings.showBg) { _ in
 							ASmanager.settings.saveSettings()
 						}
+
+					// Opacity
 					VStack(alignment: .center) {
 						HStack {
 							Text("Opacity")
 							Spacer()
-							Text("\(Int(ASmanager.settings.bgBlur))")
-								.font(.title3)
-							    .font(.title3.weight(.bold))
-   								.modifier(monospacedIfAv())
-
+							Text("\(Int(ASmanager.settings.bgOpacity * 100))%")
+								.font(.title3.weight(.bold))
+								.modifier(monospacedIfAv())
 						}
 						HStack {
 							Text("0%")
@@ -61,6 +61,8 @@ struct SettingsView: View {
 								.modifier(monospacedIfAv())
 						}
 					}
+
+					// Blur
 					VStack(alignment: .center) {
 						HStack {
 							Text("Blur")
@@ -68,7 +70,6 @@ struct SettingsView: View {
 							Text("\(Int(ASmanager.settings.bgBlur))")
 								.font(.title3.weight(.bold))
 								.modifier(monospacedIfAv())
-
 						}
 						HStack {
 							Text("0 ")
@@ -83,14 +84,14 @@ struct SettingsView: View {
 						}
 					}
 				}
-				Section(
-					header: Text("metadata")
-				) {
+
+				Section(header: Text("metadata")) {
 					Toggle("Show metadata", isOn: $ASmanager.settings.showMetadata)
 						.onChange(of: ASmanager.settings.showMetadata) { _ in
 							ASmanager.settings.showAudioQuality = false
 							ASmanager.settings.saveSettings()
 						}
+
 					Toggle("Show audio quality information", isOn: $ASmanager.settings.showAudioQuality)
 						.onChange(of: ASmanager.settings.showAudioQuality) { _ in
 							ASmanager.settings.saveSettings()
@@ -98,14 +99,15 @@ struct SettingsView: View {
 						.disabled(!ASmanager.settings.showMetadata)
 				}
 			}
+
 			Spacer()
 			StartStopButton(ASmanager: ASmanager)
 		}
 	}
 }
 
-#Preview {
-	SettingsView(
-		ASmanager: AirstreamManager()
-	)
+struct SettingsView_Previews: PreviewProvider {
+	static var previews: some View {
+		SettingsView(ASmanager: AirstreamManager())
+	}
 }
