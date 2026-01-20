@@ -1,0 +1,76 @@
+name: build-unsigned-ipa
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Carthage
+        run: brew install carthage
+
+      # 依存関係は update だと勝手に新しくなりやすいので bootstrap 推奨
+      # さらに deployment target を 15.0 に固定して、iOS 26 などに引っ張られる事故を減らす
+      - name: Build dependencies (Carthage)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        run: |
+          carthage bootstrap --platform iOS --use-xcframeworks --cache-builds
+
+      - name: List schemes (debug)
+        run: xcodebuild -list -project AirAP.xcodeproj
+
+      # exit code 65 の原因はログの中の error: に出るので、tee で必ず保存する
+      - name: Archive (no codesign)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project AirAP.xcodeproj \
+            -scheme AirAP \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/AirAP.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            clean archive | tee xcodebuild.log
+
+      # 失敗しても必ず error 行を抜粋表示（ログが長くても原因が見える）
+      - name: Show first errors
+        if: always()
+        run: |
+          echo "===== FIRST 200 lines containing 'error:' ====="
+          grep -n "error:" xcodebuild.log | head -n 200 || true
+          echo "===== ARCHIVE FAILED lines ====="
+          grep -n "ARCHIVE FAILED" xcodebuild.log || true
+
+      # 失敗しても必ずログを artifacts に残す
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          retention-days: 3
+
+      # archive が成功したときだけ ipa を作る
+      - name: Package ipa
+        if: success()
+        run: |
+          APP="build/AirAP.xcarchive/Products/Applications/AirAP.app"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          /usr/bin/zip -r AirAP-unsigned.ipa Payload
+
+      - name: Upload unsigned ipa
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirAP-unsigned-ipa
+          path: AirAP-unsigned.ipa
+          retention-days: 3
