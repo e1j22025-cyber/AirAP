@@ -26,6 +26,12 @@ jobs:
       - name: List schemes (debug)
         run: xcodebuild -list -project AirAP.xcodeproj
 
+      - name: Clean Xcode caches
+        run: |
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+          rm -rf ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+
+
       # exit code 65 の原因はログの中の error: に出るので、tee で必ず保存する
       - name: Archive (no codesign)
         run: |
