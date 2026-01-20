@@ -44,7 +44,11 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/AirAP.xcarchive" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            SWIFT_PRECOMPILE_BRIDGING_HEADER=NO \
+            _EXPERIMENTAL_CLANG_EXPLICIT_MODULES=NO \
+            _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO \
             clean archive | tee xcodebuild.log
+
 
       # 失敗しても必ず error 行を抜粋表示（ログが長くても原因が見える）
       - name: Show first errors
