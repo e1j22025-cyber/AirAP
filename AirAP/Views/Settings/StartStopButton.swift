@@ -21,7 +21,7 @@ struct StartStopButton: View {
 				systemImage: ASmanager.running ? "stop.fill" : "airplayaudio"
 			)
 			.font(.title2)
-			.bold()
+			.fontWeight(.bold)
 			.modifier(monospacedIfAv())
 		}
 		.buttonStyle(.borderedProminent)

@@ -45,7 +45,7 @@ struct SettingsView: View {
 							Spacer()
 							Text("\(Int(ASmanager.settings.bgOpacity*100))%")
 								.font(.title3)
-								.bold()
+								.fontWeight(.bold)
 								.modifier(monospacedIfAv())
 						}
 						HStack {
@@ -66,7 +66,7 @@ struct SettingsView: View {
 							Spacer()
 							Text("\(Int(ASmanager.settings.bgBlur))")
 								.font(.title3)
-								.bold()
+								.fontWeight(.bold)
 								.modifier(monospacedIfAv())
 						}
 						HStack {
