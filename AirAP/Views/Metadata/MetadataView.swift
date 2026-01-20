@@ -19,7 +19,7 @@ struct MetadataView: View {
 			HStack {
 				VStack(alignment: .leading) {
 					Text(ASmanager.title ?? "Not Playing")
-						.fontWeight(.bold)
+						.font(.headline.weight(.bold))
 						.modifier(MetadataBody())
 						.modifier(foregroundColorStyle(
 							.primary.opacity(ASmanager.title != nil ? 1 : 0.5)
