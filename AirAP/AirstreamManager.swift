@@ -37,7 +37,7 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 	@Published var artist: String?
 	@Published var albumArt: UIImage?
 
-	// MARK: Remote command handling (steering wheel next/prev)
+	// MARK: - Steering wheel / remote commands
 	private var remoteCommandsInstalled: Bool = false
 
 	override init() {
@@ -52,7 +52,7 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 	}
 
 	deinit {
-		// Make sure we stop remote commands as well
+		// Remove command handlers
 		uninstallRemoteCommands()
 
 		//MARK: REFACTOR THIS LATER
@@ -68,6 +68,8 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		audioUnit = nil
 	}
 
+	// MARK: - Public controls
+
 	func start() {
 		airstream = Airstream(name: settings.name)
 		airstream?.delegate = self
@@ -76,11 +78,11 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			running = true
 		}
 
-		// Keep AVAudioSession alive (receiver still benefits from a playback category)
+		// Keep audio session active (helps with external controls / lock screen)
 		try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
 		try? AVAudioSession.sharedInstance().setActive(true)
 
-		// Install steering wheel / remote commands so the system doesn't route them to local Music
+		// Install steering wheel/remote controls so commands don't fall back to local Music playback
 		installRemoteCommandsIfNeeded()
 	}
 
@@ -91,7 +93,7 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			clearMetadata()
 		}
 
-		// Remove command handlers when not running
+		// Remove command handlers when stopped
 		uninstallRemoteCommands()
 	}
 
@@ -111,29 +113,33 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		artist = nil
 	}
 
-	// MARK: - Remote commands (Next/Prev) to prevent local playback hijack
+	// MARK: - Remote commands (Next/Prev) -> use existing AirAP remote control
 
 	private func installRemoteCommandsIfNeeded() {
 		guard !remoteCommandsInstalled else { return }
 		remoteCommandsInstalled = true
 
-		// Receive remote control events (helps with lock screen / external controls)
+		// Receive external remote control events
 		UIApplication.shared.beginReceivingRemoteControlEvents()
 
 		let cc = MPRemoteCommandCenter.shared()
-
 		cc.nextTrackCommand.isEnabled = true
 		cc.previousTrackCommand.isEnabled = true
 
-		// IMPORTANT:
-		// Return .success to "consume" the command so it doesn't fall back to local Music playback on XR.
 		cc.nextTrackCommand.addTarget { [weak self] _ in
-			self?.debugLog("REMOTE: next")
+			// Forward to sender via AirstreamRemote (same as AirAP UI buttons)
+			DispatchQueue.main.async {
+				// Only works when remote control access is granted (canControl == true)
+				self?.airstream?.remote?.nextItem()
+			}
+			// Important: consume command so local Music on XR doesn't start playing
 			return .success
 		}
 
 		cc.previousTrackCommand.addTarget { [weak self] _ in
-			self?.debugLog("REMOTE: prev")
+			DispatchQueue.main.async {
+				self?.airstream?.remote?.previousItem()
+			}
 			return .success
 		}
 	}
@@ -147,11 +153,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		cc.previousTrackCommand.removeTarget(nil)
 
 		UIApplication.shared.endReceivingRemoteControlEvents()
-	}
-
-	private func debugLog(_ s: String) {
-		// 必要ならログ確認用に使う
-		print(s)
 	}
 
 	// MARK: - AirstreamDelegate
