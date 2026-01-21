@@ -44,19 +44,7 @@ jobs:
       - name: Archive (no codesign)
         run: |
           set -o pipefail
-          xcodebuild \
-            -project AirAP.xcodeproj \
-            -scheme AirAP \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$PWD/build/AirAP.xcarchive" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
-            SWIFT_PRECOMPILE_BRIDGING_HEADER=NO \
-            _EXPERIMENTAL_CLANG_EXPLICIT_MODULES=NO \
-            _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO \
-            clean archive | tee xcodebuild.log
+          xcodebuild             -project AirAP.xcodeproj             -scheme AirAP             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             -archivePath "$PWD/build/AirAP.xcarchive"             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO             IPHONEOS_DEPLOYMENT_TARGET=15.0             SWIFT_PRECOMPILE_BRIDGING_HEADER=NO             _EXPERIMENTAL_CLANG_EXPLICIT_MODULES=NO             _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO             clean archive | tee xcodebuild.log
 
       # archive 成功時だけ：Airstream が iOS15.5 で起動できるバイナリになっているかチェック
       - name: Inspect embedded Airstream (min OS + symbol)
@@ -68,18 +56,18 @@ jobs:
           xcrun vtool -show-build "$BIN" | tee vtool.txt
 
           python3 - <<'PY'
-import re, sys
-text=open("vtool.txt","r",encoding="utf-8").read()
-m=re.search(r"minos\\s+([0-9.]+)", text)
-if not m:
-    print("ERROR: could not parse minos"); sys.exit(1)
-minos=m.group(1)
+          import re, sys
+          text=open("vtool.txt","r",encoding="utf-8").read()
+          m=re.search(r"minos\s+([0-9.]+)", text)
+          if not m:
+              print("ERROR: could not parse minos"); sys.exit(1)
+          minos=m.group(1)
 
-def vt(v): return tuple(int(x) for x in v.split('.'))
-if vt(minos) > vt("15.5"):
-    print(f"ERROR: Airstream minos is {minos} (> 15.5)"); sys.exit(1)
-print(f"OK: Airstream minos {minos}")
-PY
+          def vt(v): return tuple(int(x) for x in v.split('.'))
+          if vt(minos) > vt("15.5"):
+              print(f"ERROR: Airstream minos is {minos} (> 15.5)"); sys.exit(1)
+          print(f"OK: Airstream minos {minos}")
+          PY
 
           echo "== undefined symbols (must NOT contain objc_claimAutoreleasedReturnValue) =="
           if xcrun nm -u "$BIN" | grep -q "objc_claimAutoreleasedReturnValue"; then
