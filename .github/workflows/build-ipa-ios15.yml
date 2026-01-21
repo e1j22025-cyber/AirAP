@@ -14,45 +14,31 @@ jobs:
       - name: Install Carthage
         run: brew install carthage
 
-      # Carthage: まずはチェックアウトだけ行い、依存側の deployment target を iOS 15.0 に強制。
-      # これをしないと Airstream が iOS 16+ 向けにビルドされ、iOS 15.5 で dyld が落ちることがある。
-      - name: Fetch dependencies (Carthage, no build)
+      # AirAP は Carthage/Checkouts/Airstream/Airstream.xcodeproj を「サブプロジェクト参照」しているため、
+      # ここでは build ではなく checkout だけ行い、後で pbxproj をパッチしてから xcodebuild archive で一緒にビルドします。
+      - name: Carthage checkout (sources only)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          rm -rf Carthage/Build
-          carthage bootstrap --platform iOS --use-xcframeworks --no-build
+          rm -rf Carthage
+          carthage checkout
 
-      - name: Patch dependency deployment targets to iOS 15.0
+      # Airstream 側の deployment target が 18.5 になっていると iOS 15.5 で dyld が落ちます。
+      # Carthage/Checkouts 以下の pbxproj を一括で iOS 15.0 に固定します。
+      - name: Force iOS 15.0 deployment target in Carthage checkouts
         run: |
           set -e
-          TARGET=15.0
-          # Airstream / shairplay など、チェックアウトされた Xcode プロジェクトの target を一括で下げる
-          for pbx in $(find Carthage/Checkouts -name project.pbxproj); do
-            perl -pi -e "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = ${TARGET};/g" "$pbx"
+          echo "Patching IPHONEOS_DEPLOYMENT_TARGET in Carthage/Checkouts..."
+          find Carthage/Checkouts -name project.pbxproj -print0 | while IFS= read -r -d '' f; do
+            /usr/bin/perl -pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$f"
           done
-          for xc in $(find Carthage/Checkouts -name '*.xcconfig' 2>/dev/null); do
-            perl -pi -e "s/IPHONEOS_DEPLOYMENT_TARGET\s*=\s*[0-9.]+/IPHONEOS_DEPLOYMENT_TARGET = ${TARGET}/g" "$xc"
-          done
-          echo "==== patched occurrences (top 200) ===="
-          grep -R "IPHONEOS_DEPLOYMENT_TARGET" -n Carthage/Checkouts | head -n 200 || true
-
-      - name: Build dependencies (Carthage)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARTHAGE_XCODEBUILD_ARGUMENTS: "IPHONEOS_DEPLOYMENT_TARGET=15.0"
-        run: |
-          rm -rf Carthage/Build
-          carthage build --platform iOS --use-xcframeworks
-
-      - name: List schemes (debug)
-        run: xcodebuild -list -project AirAP.xcodeproj
+          echo "Patched lines (sample):"
+          grep -R "IPHONEOS_DEPLOYMENT_TARGET" -n Carthage/Checkouts | head -n 60 || true
 
       - name: Clean Xcode caches
         run: |
           rm -rf ~/Library/Developer/Xcode/DerivedData
           rm -rf ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
-
 
       # exit code 65 の原因はログの中の error: に出るので、tee で必ず保存する
       - name: Archive (no codesign)
@@ -66,30 +52,41 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/AirAP.xcarchive" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
             SWIFT_PRECOMPILE_BRIDGING_HEADER=NO \
             _EXPERIMENTAL_CLANG_EXPLICIT_MODULES=NO \
             _EXPERIMENTAL_SWIFT_EXPLICIT_MODULES=NO \
             clean archive | tee xcodebuild.log
 
-      # iOS 15.5 での起動クラッシュ（dyld: Symbol missing）を防ぐためのチェック
-      - name: Verify embedded Airstream is iOS15-safe
+      # archive 成功時だけ：Airstream が iOS15.5 で起動できるバイナリになっているかチェック
+      - name: Inspect embedded Airstream (min OS + symbol)
         if: success()
         run: |
           set -e
           BIN="build/AirAP.xcarchive/Products/Applications/AirAP.app/Frameworks/Airstream.framework/Airstream"
-          if [ ! -f "$BIN" ]; then
-            echo "Airstream binary not found: $BIN"; exit 1
-          fi
           echo "== vtool (min OS) =="
-          xcrun vtool -show-build "$BIN" || true
+          xcrun vtool -show-build "$BIN" | tee vtool.txt
+
+          python3 - <<'PY'
+import re, sys
+text=open("vtool.txt","r",encoding="utf-8").read()
+m=re.search(r"minos\\s+([0-9.]+)", text)
+if not m:
+    print("ERROR: could not parse minos"); sys.exit(1)
+minos=m.group(1)
+
+def vt(v): return tuple(int(x) for x in v.split('.'))
+if vt(minos) > vt("15.5"):
+    print(f"ERROR: Airstream minos is {minos} (> 15.5)"); sys.exit(1)
+print(f"OK: Airstream minos {minos}")
+PY
+
           echo "== undefined symbols (must NOT contain objc_claimAutoreleasedReturnValue) =="
-          if xcrun nm -um "$BIN" | grep -q "objc_claimAutoreleasedReturnValue"; then
-            echo "ERROR: Airstream still references objc_claimAutoreleasedReturnValue (not available on iOS 15.5)";
-            xcrun nm -um "$BIN" | grep "objc_claimAutoreleasedReturnValue" || true
+          if xcrun nm -u "$BIN" | grep -q "objc_claimAutoreleasedReturnValue"; then
+            echo "ERROR: Airstream still references objc_claimAutoreleasedReturnValue (not available on iOS 15.5)"
+            xcrun nm -u "$BIN" | grep "objc_claimAutoreleasedReturnValue" || true
             exit 1
           fi
-          echo "OK"
-
 
       # 失敗しても必ず error 行を抜粋表示（ログが長くても原因が見える）
       - name: Show first errors
