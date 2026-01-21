@@ -14,7 +14,6 @@ import MediaPlayer
 
 class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 	@Published var airstream: Airstream?
-
 	@Published var settings: AAPSettingsModel
 
 	var audioUnit: AudioComponentInstance?
@@ -28,7 +27,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 
 	/// Minimum amount of audio (in bytes) that must be present in the circular buffer before we
 	/// allow CoreAudio to start rendering.
-	/// The default value corresponds to ~2 s of 44.1 kHz, 16-bit, stereo PCM (44 100 * 1 s * 4 B).
 	private var minBufferBytes: Int32 = 176_000
 	private let targetLatencySeconds: Double = 1.0
 
@@ -43,22 +41,24 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 	override init() {
 		self.settings = AAPSettingsModel()
 		super.init()
-		// Allocate a generous 1 MiB circular buffer. This must be large enough to
-		// hold the minBufferBytes (≈350 kB) to allow playback to start.
+
+		// Allocate a generous 1 MiB circular buffer.
 		_TPCircularBufferInit(&circularBuffer, 1_048_576, MemoryLayout.size(ofValue: circularBuffer))
-//		#if RELEASE
+
+		// IMPORTANT: Install remote command handlers ALWAYS (prevents fallback to local Music).
+		installRemoteCommandsIfNeeded()
+
+		//	#if RELEASE
 		start()
-//		#endif
+		//	#endif
 	}
 
 	deinit {
-		// Remove command handlers
+		// Keep the system clean
 		uninstallRemoteCommands()
 
-		//MARK: REFACTOR THIS LATER
 		TPCircularBufferClear(&circularBuffer)
 
-		//stop audio unit
 		if let audioUnit = audioUnit {
 			let status = AudioOutputUnitStop(audioUnit)
 			if status != noErr {
@@ -74,35 +74,35 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		airstream = Airstream(name: settings.name)
 		airstream?.delegate = self
 		airstream?.startServer()
+
 		withAnimation {
 			running = true
 		}
 
-		// Keep audio session active (helps with external controls / lock screen)
 		try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
 		try? AVAudioSession.sharedInstance().setActive(true)
 
-		// Install steering wheel/remote controls so commands don't fall back to local Music playback
-		installRemoteCommandsIfNeeded()
+		// Claim Now Playing so iOS routes remote commands here (not to local Music).
+		updateNowPlaying(active: true)
 	}
 
 	func stop() {
 		airstream?.stopServer()
+
 		withAnimation {
 			running = false
+			canControl = false
 			clearMetadata()
 		}
 
-		// Remove command handlers when stopped
-		uninstallRemoteCommands()
+		// Keep remote commands installed even when stopped (prevents fallback to Music).
+		updateNowPlaying(active: false)
 	}
 
 	func startStop() {
 		switch running {
-		case true:
-			stop()
-		case false:
-			start()
+		case true: stop()
+		case false: start()
 		}
 	}
 
@@ -113,26 +113,46 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		artist = nil
 	}
 
+	// MARK: - Now Playing (helps routing remote controls)
+
+	private func updateNowPlaying(active: Bool) {
+		var info: [String: Any] = [
+			MPMediaItemPropertyTitle: "AirAP Receiver",
+			MPMediaItemPropertyArtist: "AirPlay"
+		]
+
+		// If we have metadata, expose it (optional but helps “ownership”)
+		if let t = title, !t.isEmpty { info[MPMediaItemPropertyTitle] = t }
+		if let a = artist, !a.isEmpty { info[MPMediaItemPropertyArtist] = a }
+		if let al = album, !al.isEmpty { info[MPMediaItemPropertyAlbumTitle] = al }
+
+		MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+		if #available(iOS 13.0, *) {
+			MPNowPlayingInfoCenter.default().playbackState = active ? .playing : .paused
+		}
+	}
+
 	// MARK: - Remote commands (Next/Prev) -> use existing AirAP remote control
 
 	private func installRemoteCommandsIfNeeded() {
 		guard !remoteCommandsInstalled else { return }
 		remoteCommandsInstalled = true
 
-		// Receive external remote control events
 		UIApplication.shared.beginReceivingRemoteControlEvents()
 
 		let cc = MPRemoteCommandCenter.shared()
+
+		// Next / Prev (steering wheel)
 		cc.nextTrackCommand.isEnabled = true
 		cc.previousTrackCommand.isEnabled = true
 
 		cc.nextTrackCommand.addTarget { [weak self] _ in
 			// Forward to sender via AirstreamRemote (same as AirAP UI buttons)
 			DispatchQueue.main.async {
-				// Only works when remote control access is granted (canControl == true)
 				self?.airstream?.remote?.nextItem()
 			}
-			// Important: consume command so local Music on XR doesn't start playing
+			// IMPORTANT: consume so local Music doesn't hijack
 			return .success
 		}
 
@@ -142,6 +162,16 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			}
 			return .success
 		}
+
+		// Optional: swallow play/pause so the XR Music app doesn't suddenly take over.
+		// (Main iPhone keeps playing anyway; this prevents “wake Music then skip = local”.)
+		cc.playCommand.isEnabled = true
+		cc.pauseCommand.isEnabled = true
+		cc.togglePlayPauseCommand.isEnabled = true
+
+		cc.playCommand.addTarget { _ in .success }
+		cc.pauseCommand.addTarget { _ in .success }
+		cc.togglePlayPauseCommand.addTarget { _ in .success }
 	}
 
 	private func uninstallRemoteCommands() {
@@ -151,27 +181,28 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		let cc = MPRemoteCommandCenter.shared()
 		cc.nextTrackCommand.removeTarget(nil)
 		cc.previousTrackCommand.removeTarget(nil)
+		cc.playCommand.removeTarget(nil)
+		cc.pauseCommand.removeTarget(nil)
+		cc.togglePlayPauseCommand.removeTarget(nil)
 
 		UIApplication.shared.endReceivingRemoteControlEvents()
 	}
 
 	// MARK: - AirstreamDelegate
 
-	//brefore stream setup
 	func airstream(_ airstream: Airstream, willStartStreamingWithStreamFormat streamFormat: AudioStreamBasicDescription) {
-		// Set a ~2s buffer based on the negotiated stream format.
 		let bytesPerFrame = Double(streamFormat.mBytesPerFrame)
 		let bytesPerSecond = streamFormat.mSampleRate * bytesPerFrame
 		minBufferBytes = Int32(bytesPerSecond * targetLatencySeconds)
-		// Ensure we start in buffering mode.
+
 		self.buffering = true
 
 		var streamFormat = streamFormat
-		//create audio component
+
 		#if canImport(AppKit)
 		var desc = AudioComponentDescription(
 			componentType: kAudioUnitType_Output,
-			componentSubType: kAudioUnitSubType_DefaultOutput, //OS X only
+			componentSubType: kAudioUnitSubType_DefaultOutput,
 			componentManufacturer: kAudioUnitManufacturer_Apple,
 			componentFlags: 0,
 			componentFlagsMask: 0
@@ -185,6 +216,7 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			componentFlagsMask: 0
 		)
 		#endif
+
 		if let comp = AudioComponentFindNext(nil, &desc) {
 			let status = AudioComponentInstanceNew(comp, &audioUnit)
 			if status != noErr {
@@ -196,7 +228,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 
 		guard let audioUnit = audioUnit else { return }
 
-		//enable input
 		let status = AudioUnitSetProperty(
 			audioUnit,
 			kAudioUnitProperty_StreamFormat,
@@ -211,7 +242,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			return
 		}
 
-		//setup callbacks
 		var renderCallback: AURenderCallbackStruct = AURenderCallbackStruct(
 			inputProc: OutputRenderCallback,
 			inputProcRefCon: Unmanaged.passUnretained(self).toOpaque()
@@ -230,7 +260,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			return
 		}
 
-		//init audio unit
 		let initStatus = AudioUnitInitialize(audioUnit)
 		if initStatus != noErr {
 			print("failed to init audio unit")
@@ -238,7 +267,6 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			return
 		}
 
-		//start audio unit
 		let unitStatus = AudioOutputUnitStart(audioUnit)
 		if unitStatus != noErr {
 			print("failed to start audio unit")
@@ -247,13 +275,11 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		}
 	}
 
-	//here's some audio
 	func airstream(
 		_ airstream: Airstream,
 		processAudio buffer: UnsafeMutablePointer<CChar>,
 		length: Int32
 	) {
-		//MARK: add volume changing later
 		let audioBuffer = AudioBuffer(
 			mNumberChannels: UInt32(airstream.channelsPerFrame),
 			mDataByteSize: UInt32(length),
@@ -270,16 +296,13 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			bufferList.mBuffers.mDataByteSize
 		)
 
-		//are we falling behind? checks if buffering is needed
 		let fillCount = TPCircularBufferFillCount(&circularBuffer)
 		self.buffering = fillCount < minBufferBytes
 	}
 
-	//bro stopped airplaying
 	func airstreamDidStopStreaming(_ airstream: Airstream) {
 		TPCircularBufferClear(&circularBuffer)
 
-		//stop audio unit
 		if let audioUnit = audioUnit {
 			let status = AudioOutputUnitStop(audioUnit)
 			if status != noErr {
@@ -287,27 +310,32 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 			}
 		}
 		audioUnit = nil
+
+		DispatchQueue.main.async {
+			self.canControl = false
+			self.updateNowPlaying(active: false)
+		}
 	}
 
-	//recieved cover art
 	func airstream(_ airstream: Airstream, didSetCoverart coverart: Data) {
 		guard let uiimage = UIImage(data: coverart) else {
 			albumArt = nil
 			return
-		} //con only if the data is an image
-		guard uiimage != albumArt else { return } //con only if album art is diff
+		}
+		guard uiimage != albumArt else { return }
 		withAnimation {
 			albumArt = uiimage
 		}
 	}
 
-	//recieved track info
 	func airstream(_ airstream: Airstream, didSetMetadata metadata: [String : String]) {
 		withAnimation {
-			title = metadata["minm"] //??
-			album = metadata["asal"] //airstream album
-			artist = metadata["asar"] //airstream artist
+			title = metadata["minm"]
+			album = metadata["asal"]
+			artist = metadata["asar"]
 		}
+		// Refresh now playing ownership/metadata
+		updateNowPlaying(active: running)
 	}
 
 	func airstream(_ airstream: Airstream, didGainAccessTo remote: AirstreamRemote) {
@@ -325,9 +353,8 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		ioData
 	) in
 		let manager = Unmanaged<AirstreamManager>.fromOpaque(inRefCon).takeUnretainedValue()
+
 		if TPCircularBufferFillCount(&manager.circularBuffer) == 0 || manager.buffering {
-			//TODO: fixme
-//			i think its just best to return???
 			for _ in 0..<Int(ioData!.pointee.mNumberBuffers) {
 				memset(
 					ioData!.pointee.mBuffers.mData,
@@ -342,9 +369,7 @@ class AirstreamManager: NSObject, ObservableObject, AirstreamDelegate {
 		let sourceBuffer = TPCircularBufferTail(&manager.circularBuffer, &availableBytes)
 		let amount = min(ioData!.pointee.mBuffers.mDataByteSize, availableBytes)
 
-		//copy audio from our circ buffer to audio unit's buffer
 		memcpy(ioData!.pointee.mBuffers.mData, sourceBuffer, Int(amount))
-
 		TPCircularBufferConsume(&manager.circularBuffer, amount)
 
 		return noErr
